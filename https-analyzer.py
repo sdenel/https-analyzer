@@ -9,6 +9,8 @@ import subprocess
 import http.client
 import sys
 
+from jinja2 import Template
+
 logging.getLogger().setLevel(logging.INFO)
 
 
@@ -84,19 +86,27 @@ if __name__ == '__main__':
     # Parsing optional arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--dns-server", help="DNS server to use")
+    parser.add_argument("--output", help="Output format (json or html")  # TODO default + check
     args = parser.parse_args()
     if args.dns_server is not None:
         logging.info(f"Using DNS server: {args.dns_server}")
         sys.stderr.flush()
+    output_html = args.output == 'html'
 
     # Parsing stdin
     stdin_lines = [l.split("#")[0].split(' ') for l in sys.stdin.readlines()]
     domains = [d.strip() for d in sum(stdin_lines, []) if len(d) > 0]
 
-    print("{")
+    if output_html:
+        with open('template.j2.html', 'r') as template_file:
+            template = template_file.read()
+        print("<table>")
+    else:
+        print("{")
+
     for domain_idx, domain in enumerate(domains):
-        sys.stdout.write(f'{"," if domain_idx > 0 else ""}"{domain}": ')
-        sys.stdout.flush()
+        logging.info(f"Parsing {domain}")
+
         assert is_valid_hostname(domain), f"{domain} is not a valid hostname!"
         ip = dns_resolve(domain, args.dns_server)
         http_response = get_response(ip, domain, 80)
@@ -111,5 +121,17 @@ if __name__ == '__main__':
                 'headerLocation': https_response.getheader('location')
             }
         }
-        print(json.dumps(r, sort_keys=True, indent=4, separators=(',', ': ')))
-    print("}")
+
+        if output_html:
+            r['domain'] = domain
+            r['domain_padded'] = domain.ljust(100, ' ')
+            html = Template(template).render(r)
+            print(html)
+        else:
+            sys.stdout.write(f'{"," if domain_idx > 0 else ""}"{domain}": ')
+            print(json.dumps(r, sort_keys=True, indent=4, separators=(',', ': ')))
+
+    if output_html:
+        print("</table>")
+    else:
+        print("}")

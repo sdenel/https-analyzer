@@ -1,5 +1,5 @@
 FROM python:3.8-alpine
-RUN apk add bind-tools
+RUN apk add bind-tools && pip install -U Jinja2
 
 COPY / /opt/
 WORKDIR /opt/
