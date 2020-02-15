@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
+import argparse
 import ipaddress
 import json
+import logging
 import re
 import ssl
 import subprocess
 import http.client
 import sys
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def get_response(
@@ -56,7 +60,10 @@ def is_valid_hostname(hostname):
     return all(allowed.match(label) for label in labels)
 
 
-def dns_resolve(hostname: str) -> ipaddress.ip_address:
+def dns_resolve(
+        hostname: str,
+        dns_server: str = None
+) -> ipaddress.ip_address:
     """
     ip = dns_resolve('www.akamai.com')
     ip.is_private
@@ -64,20 +71,34 @@ def dns_resolve(hostname: str) -> ipaddress.ip_address:
 
     """
 
-    # Check is domain
-    ip_as_str = subprocess.check_output(f"dig +short {hostname}", shell=True).strip().decode('utf-8').split('\n')[-1]
+    cmd = f"dig +short {hostname}"
+    if dns_server:
+        dns_server = dns_server.strip()
+        assert is_valid_hostname(dns_server) or re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", dns_server), f"{dns_server} is not an IP not a hostname!"
+        cmd += f" @{dns_server}"
+    ip_as_str = subprocess.check_output(cmd, shell=True).strip().decode('utf-8').split('\n')[-1]
     return ipaddress.ip_address(ip_as_str)
 
 
 if __name__ == '__main__':
+    # Parsing optional arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dns-server", help="DNS server to use")
+    args = parser.parse_args()
+    if args.dns_server is not None:
+        logging.info(f"Using DNS server: {args.dns_server}")
+        sys.stderr.flush()
+
+    # Parsing stdin
     stdin_lines = [l.split("#")[0].split(' ') for l in sys.stdin.readlines()]
     domains = [d.strip() for d in sum(stdin_lines, []) if len(d) > 0]
+
     print("{")
     for domain_idx, domain in enumerate(domains):
         sys.stdout.write(f'{"," if domain_idx > 0 else ""}"{domain}": ')
         sys.stdout.flush()
         assert is_valid_hostname(domain), f"{domain} is not a valid hostname!"
-        ip = dns_resolve(domain)
+        ip = dns_resolve(domain, args.dns_server)
         http_response = get_response(ip, domain, 80)
         https_response = get_response(ip, domain, 443)
         r = {

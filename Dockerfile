@@ -7,5 +7,4 @@ WORKDIR /opt/
 # Running unit tests
 RUN python3 -m doctest -v https-analyzer.py
 
-ENTRYPOINT /opt/https-analyzer.py
-
+ENTRYPOINT ["/opt/https-analyzer.py"]
