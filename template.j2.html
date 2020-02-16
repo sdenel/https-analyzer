@@ -4,6 +4,7 @@
         white-space: pre;
         background-color: black; color: white;
         border-bottom: 3px #505050 solid;
+        color: white;
     }
     div:hover {
         background-color: #202020;
@@ -12,6 +13,9 @@
         color: white;
         text-decoration: none;
     }
-</style><div>- {{ "%-20s" | format(domain,) }} # <a href="https://db-ip.com/{{ ip }}">{{ "%-15s" | format(ip,) }}</a> <a href="https://{{ domain }}/">HTTPS</a>: <span style="background: {{ https.status_color }}">{{ https.status }}</span> <a href ="{{ https.headerLocation }}" target="_blank" style="color: white">{{- https.headerLocation }}</a><br
-/>                       #                 <a href="http://{{ domain }}/">HTTP</a> : {% if http == https %}//{% else %}<span style="background: {{ http.status_color }}">{{ http.status }}</span> {% if http.headerLocation == 'https://'+domain+'/' %}⬆ {% endif %}<a href ="{{ http.headerLocation }}" target="_blank" style="color: white">{{- http.headerLocation }}</a>{% endif %}
+</style>
+{% for d in domains %}
+<div>- {{ "%-20s" | format(d.domain,) }} # <a href="https://db-ip.com/{{ d.ip }}">{{ "%-15s" | format(d.ip,) }}</a> <a href="https://{{ d.domain }}/">HTTPS</a>: {{ d.https.message }}<br
+/>                       #                 <a href="http://{{ d.domain }}/">HTTP</a> : {{ d.http.message }}
 </div>
+{% endfor %}

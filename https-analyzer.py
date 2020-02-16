@@ -8,6 +8,7 @@ import ssl
 import subprocess
 import http.client
 import sys
+from copy import deepcopy
 
 from jinja2 import Template
 
@@ -86,46 +87,20 @@ if __name__ == '__main__':
     # Parsing optional arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--dns-server", help="DNS server to use")
-    parser.add_argument("--output", help="Output format (json or html")  # TODO default + check
+    parser.add_argument("--generate-html-from-json", action="store_true")
     args = parser.parse_args()
-    if args.dns_server is not None:
-        logging.info(f"Using DNS server: {args.dns_server}")
-        sys.stderr.flush()
-    output_html = args.output == 'html'
-
-    # Parsing stdin
-    stdin_lines = [l.split("#")[0].split(' ') for l in sys.stdin.readlines()]
-    domains = [d.strip() for d in sum(stdin_lines, []) if len(d) > 0]
-
-    if output_html:
-        with open('template.j2.html', 'r') as template_file:
-            template = template_file.read()
-        print("<table>")
-    else:
-        print("{")
-
-    for domain_idx, domain in enumerate(domains):
-        logging.info(f"Parsing {domain}")
-
-        assert is_valid_hostname(domain), f"{domain} is not a valid hostname!"
-        ip = dns_resolve(domain, args.dns_server)
-        http_response = get_response(ip, domain, 80)
-        https_response = get_response(ip, domain, 443)
-        r = {
-            'ip': str(ip),
-            'http': {
-                'status': http_response.status,
-                'headerLocation': http_response.getheader('location')
-            }, 'https': {
-                'status': https_response.status,
-                'headerLocation': https_response.getheader('location')
-            }
+    if args.generate_html_from_json:
+        stdin_json = json.loads('\n'.join(sys.stdin.readlines()))
+        # print(stdin_json)
+        assert args.dns_server is None, "--dns-server isn't processed when using --generate-html-from-json mode!"
+        jinja_context = {
+            'domains': []
         }
-
-        if output_html:
-            r['domain'] = domain
+        for d in stdin_json:
+            ctx = deepcopy(stdin_json[d])
+            ctx['domain'] = d
             for t in 'http', 'https':
-                s = r[t]['status']
+                s = ctx[t]['status']
                 if 200 <= s < 300:
                     c = 'green'
                 elif 300 <= s < 400:
@@ -134,14 +109,52 @@ if __name__ == '__main__':
                     c = 'red'
                 else:
                     c = 'black'
-                r[t]['status_color'] = c
-            html = Template(template).render(r)
-            print(html)
-        else:
+                ctx[t]['message'] = f'<span style="background: {c}">{s}</span> '
+
+                if ctx[t]['headerLocation'] is not None:
+                    loc = ctx[t]['headerLocation']
+                    if t == 'http' and ctx['http']['status'] in (301, 302) and loc == f'https://{d}/':
+                        ctx[t]['message'] += '⬆ redirects to https'
+                    else:
+                        ctx[t]['message'] += f'<a href ="{loc}" target="_blank" style="color: white">{loc}</a>'
+
+            if stdin_json[d]['http'] == stdin_json[d]['https']:
+                ctx['http']['message'] = '//'
+            # if ctx['header']
+
+            jinja_context['domains'].append(ctx)
+        with open('template.j2.html', 'r') as template_file:
+            template = template_file.read()
+            print(Template(template).render(jinja_context))
+    else:
+        if args.dns_server is not None:
+            logging.info(f"Using DNS server: {args.dns_server}")
+            sys.stderr.flush()
+
+        # Parsing stdin
+        stdin_lines = [l.split("#")[0].split(' ') for l in sys.stdin.readlines()]
+        domains = [d.strip() for d in sum(stdin_lines, []) if len(d) > 0]
+
+        print("{")
+
+        for domain_idx, domain in enumerate(domains):
+            logging.info(f"Parsing {domain}")
+
+            assert is_valid_hostname(domain), f"{domain} is not a valid hostname!"
+            ip = dns_resolve(domain, args.dns_server)
+            http_response = get_response(ip, domain, 80)
+            https_response = get_response(ip, domain, 443)
+            r = {
+                'ip': str(ip),
+                'http': {
+                    'status': http_response.status,
+                    'headerLocation': http_response.getheader('location')
+                }, 'https': {
+                    'status': https_response.status,
+                    'headerLocation': https_response.getheader('location')
+                }
+            }
+
             sys.stdout.write(f'{"," if domain_idx > 0 else ""}"{domain}": ')
             print(json.dumps(r, sort_keys=True, indent=4, separators=(',', ': ')))
-
-    if output_html:
-        print("</table>")
-    else:
         print("}")
