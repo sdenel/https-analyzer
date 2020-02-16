@@ -1,4 +1,3 @@
-<div style="font-family: monospace; white-space: pre; background-color: black; color: white">
-    - {{ domain_padded }} # {{ ip }} HTTP: {{ http.status }} {{ http.headerLocation }}
-                                     HTTPS: {{ https.status }} {{ https.headerLocation }}
+<div style="font-family: monospace; white-space: pre; background-color: black; color: white; border-bottom: 1px black solid">- {{ "%-20s" | format(domain,) }} # {{ "%-15s" | format(ip,) }} HTTPS: <span style="background: {{ https.status_color }}">{{ https.status }}</span> <a href ="{{ https.headerLocation }}" target="_blank" style="color: white">{{- https.headerLocation }}</a><br
+/>                       #                 HTTP:  {% if http == https %}//{% elif http.headerLocation == 'https://'+domain+'/' %}⬆{% else %}<span style="background: {{ http.status_color }}">{{ http.status }}</span> <a href ="{{ http.headerLocation }}" target="_blank" style="color: white">{{- http.headerLocation }}</a>{% endif %}
 </div>

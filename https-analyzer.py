@@ -124,7 +124,17 @@ if __name__ == '__main__':
 
         if output_html:
             r['domain'] = domain
-            r['domain_padded'] = domain.ljust(100, ' ')
+            for t in 'http', 'https':
+                s = r[t]['status']
+                if 200 <= s < 300:
+                    c = 'green'
+                elif 300 <= s < 400:
+                    c = 'blue'
+                elif 400 <= s < 500:
+                    c = 'red'
+                else:
+                    c = 'black'
+                r[t]['status_color'] = c
             html = Template(template).render(r)
             print(html)
         else:
