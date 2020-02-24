@@ -10,6 +10,7 @@ import subprocess
 import http.client
 import sys
 from copy import deepcopy
+from typing import List
 
 import requests
 from OpenSSL import crypto
@@ -54,15 +55,13 @@ def get_response(
         http_connection.putheader('Host', hostname)
         http_connection.endheaders()
 
-        response = http_connection.getresponse()
-
         if isinstance(http_connection, http.client.HTTPSConnection):
             pem_cert = ssl.DER_cert_to_PEM_cert(http_connection.sock.getpeercert(True))
             x509_cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem_cert.encode())
         else:
             x509_cert = None
 
-        return response, x509_cert
+        return http_connection.getresponse(), x509_cert
 
     if is_tls is None:
         is_tls = port % 1000 == 443
@@ -121,8 +120,6 @@ def dns_resolve(
 
     if dns_server == 'dns-over-https':
         ret = requests.get(f'https://cloudflare-dns.com/dns-query?name={hostname}', headers={'accept': 'application/dns-json'})
-        sys.stderr.write(str(ret.json()))
-        sys.stderr.flush()
         answer = ret.json()['Answer']
         type1_data = [a['data'] for a in answer if a['type'] == 1]
         assert len(type1_data) == 1
@@ -137,7 +134,7 @@ def dns_resolve(
     return ipaddress.ip_address(ip_as_str)
 
 
-def get_certificate_san(x509cert: X509) -> str:
+def get_certificate_san_domains(x509cert: X509) -> List[str]:
     """
     From: https://stackoverflow.com/a/50894566/1795027
     """
@@ -147,87 +144,49 @@ def get_certificate_san(x509cert: X509) -> str:
         ext = x509cert.get_extension(i)
         if 'subjectAltName' in str(ext.get_short_name()):
             san = ext.__str__()
-    return san
+    return [v.split(':')[1] for v in san.split(', ')]
 
 
 if __name__ == '__main__':
     # Parsing optional arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--dns-server", help="DNS server to use")
-    parser.add_argument("--generate-html-from-json", action="store_true")
     args = parser.parse_args()
-    if args.generate_html_from_json:
-        stdin_json = json.loads('\n'.join(sys.stdin.readlines()))
-        # print(stdin_json)
-        assert args.dns_server is None, "--dns-server isn't processed when using --generate-html-from-json mode!"
-        jinja_context = {
-            'domains': []
-        }
-        for d in stdin_json:
-            ctx = deepcopy(stdin_json[d])
-            ctx['domain'] = d
-            for t in 'http', 'https':
-                s = ctx[t]['status']
-                if 200 <= s < 300:
-                    c = 'green'
-                elif 300 <= s < 400:
-                    c = 'blue'
-                elif 400 <= s < 500:
-                    c = 'red'
-                else:
-                    c = 'black'
-                ctx[t]['message'] = f'<span style="background: {c}">{s}</span> '
 
-                if ctx[t]['headerLocation'] is not None:
-                    loc = ctx[t]['headerLocation']
-                    if t == 'http' and ctx['http']['status'] in (301, 302) and loc == f'https://{d}/':
-                        ctx[t]['message'] += '⬆ redirects to https'
-                    else:
-                        ctx[t]['message'] += f'<a href ="{loc}" target="_blank" style="color: white">{loc}</a>'
+    if args.dns_server is not None:
+        logging.info(f"Using DNS server: {args.dns_server}")
+        sys.stderr.flush()
 
-            if stdin_json[d]['http'] == stdin_json[d]['https']:
-                ctx['http']['message'] = '//'
-            # if ctx['header']
+    # Parsing stdin
+    stdin_lines = [l.split("#")[0].split(' ') for l in sys.stdin.readlines()]
+    domains = [d.strip() for d in sum(stdin_lines, []) if len(d) > 0]
 
-            jinja_context['domains'].append(ctx)
-        with open('template.j2.html', 'r') as template_file:
-            template = template_file.read()
-            print(Template(template).render(jinja_context))
-    else:
-        if args.dns_server is not None:
-            logging.info(f"Using DNS server: {args.dns_server}")
-            sys.stderr.flush()
+    print("{")
 
-        # Parsing stdin
-        stdin_lines = [l.split("#")[0].split(' ') for l in sys.stdin.readlines()]
-        domains = [d.strip() for d in sum(stdin_lines, []) if len(d) > 0]
+    for domain_idx, domain in enumerate(domains):
+        logging.info(f"Parsing {domain}")
 
-        print("{")
-
-        for domain_idx, domain in enumerate(domains):
-            logging.info(f"Parsing {domain}")
-
-            assert is_valid_hostname(domain), f"{domain} is not a valid hostname!"
-            ip = dns_resolve(domain, args.dns_server)
-            http_response = get_response(ip, domain, 80)
-            https_response = get_response(ip, domain, 443)
-            r = {
-                'ip': str(ip),
-                'http': {
-                    'status': http_response[0].status,
-                    'headerLocation': http_response[0].getheader('location')
-                }, 'https': {
-                    'status': https_response[0].status,
-                    'headerLocation': https_response[0].getheader('location'),
-                    'certificate': {
-                        'issuer': components_to_str(https_response[1].get_issuer().get_components()),
-                        'subject': components_to_str(https_response[1].get_subject().get_components()),
-                        'san': get_certificate_san(https_response[1])
-                        # TODO: is domain is certif alternate names ?
-                    }
+        assert is_valid_hostname(domain), f"{domain} is not a valid hostname!"
+        ip = dns_resolve(domain, args.dns_server)
+        http_response = get_response(ip, domain, 80)
+        https_response = get_response(ip, domain, 443)
+        r = {
+            'ip': str(ip),
+            'http': {
+                'status': http_response[0].status,
+                'headerLocation': http_response[0].getheader('location')
+            }, 'https': {
+                'status': https_response[0].status,
+                'headerLocation': https_response[0].getheader('location'),
+                'certificate': {
+                    'issuer': components_to_str(https_response[1].get_issuer().get_components()),
+                    'subject': components_to_str(https_response[1].get_subject().get_components()),
+                    'san_domains': get_certificate_san_domains(https_response[1])
+                    # TODO: is domain is certif alternate names ?
                 }
             }
+        }
 
-            sys.stdout.write(f'{"," if domain_idx > 0 else ""}"{domain}": ')
-            print(json.dumps(r, sort_keys=True, indent=4, separators=(',', ': ')))
-        print("}")
+        sys.stdout.write(f'{"," if domain_idx > 0 else ""}"{domain}": ')
+        print(json.dumps(r, sort_keys=True, indent=4, separators=(',', ': ')))
+    print("}")
