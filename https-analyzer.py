@@ -3,6 +3,7 @@ import argparse
 import ipaddress
 import json
 import logging
+import os
 import re
 import ssl
 import subprocess
@@ -10,9 +11,17 @@ import http.client
 import sys
 from copy import deepcopy
 
+from OpenSSL import crypto
 from jinja2 import Template
 
 logging.getLogger().setLevel(logging.INFO)
+
+
+def components_to_str(components):
+    s = ''
+    for c in components:
+        s += f'{c[0].decode()}={c[1].decode()}, '
+    return s.strip().strip(',')
 
 
 def get_response(
@@ -20,27 +29,60 @@ def get_response(
         hostname: str,
         port: int = 443,
         is_tls: bool = None
-) -> http.client.HTTPResponse:
+) -> (http.client.HTTPResponse, str):
     """
-    >>> get_response(dns_resolve('google.com'), 'google.com').status
+    >>> get_response(dns_resolve('google.com'), 'google.com')[0].status
     301
     """
 
-    def get_response_inner(http_connection: http.client.HTTPConnection) -> http.client.HTTPResponse:
-        http_connection.putrequest('GET', '/', skip_host=True)
+    def get_proxy_host_port(proxy: str):
+        """
+        >>> get_proxy_host_port('http://toto.com:3128')
+        ('toto.com', 3128)
+        """
+        proxy = proxy.strip('/')
+        port = proxy.split(':')[-1]
+        host = proxy.split('/')[-1].split(':')[0]
+        # TODO check host validity
+        assert port.isdigit(), port
+        return host, int(port)
+
+    def get_response_inner(http_connection: http.client.HTTPConnection) -> (http.client.HTTPResponse, str):
+        http_connection.putrequest('GET', '/')
         http_connection.putheader('Host', hostname)
         http_connection.endheaders()
-        return http_connection.getresponse()
+
+        response = http_connection.getresponse()
+
+        if isinstance(http_connection, http.client.HTTPSConnection):
+            x: http.client.HTTPSConnection = http_connection
+            pem_cert = ssl.DER_cert_to_PEM_cert(x.sock.getpeercert(True))
+            x509_cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem_cert.encode())
+        else:
+            x509_cert = None
+
+        return response, x509_cert
 
     if is_tls is None:
         is_tls = port % 1000 == 443
     if is_tls:
-        context = ssl.create_default_context()
+        context: ssl.SSLContext = ssl.create_default_context()
         context.check_hostname = False
-        context.verify_mode = False
-        return get_response_inner(http.client.HTTPSConnection(str(ip_address), port, context=context))
+        context.verify_mode = ssl.CERT_NONE
+        if 'HTTPS_PROXY' in os.environ:
+            proxy_host, proxy_port = get_proxy_host_port(os.environ['HTTPS_PROXY'])
+            conn = http.client.HTTPSConnection(proxy_host, proxy_port, context=context)
+            conn.set_tunnel(str(ip_address), port=port)
+        else:
+            conn = http.client.HTTPSConnection(str(ip_address), port, context=context)
     else:
-        return get_response_inner(http.client.HTTPConnection(str(ip_address), port))
+        if 'HTTP_PROXY' in os.environ:
+            proxy_host, proxy_port = get_proxy_host_port(os.environ['HTTP_PROXY'])
+            conn = http.client.HTTPConnection(proxy_host, proxy_port)
+            conn.set_tunnel(str(ip_address), port=port)
+        else:
+            conn = http.client.HTTPConnection(str(ip_address), port)
+    return get_response_inner(conn)
 
 
 def is_valid_hostname(hostname):
@@ -147,11 +189,16 @@ if __name__ == '__main__':
             r = {
                 'ip': str(ip),
                 'http': {
-                    'status': http_response.status,
-                    'headerLocation': http_response.getheader('location')
+                    'status': http_response[0].status,
+                    'headerLocation': http_response[0].getheader('location')
                 }, 'https': {
-                    'status': https_response.status,
-                    'headerLocation': https_response.getheader('location')
+                    'status': https_response[0].status,
+                    'headerLocation': https_response[0].getheader('location'),
+                    'certificate': {
+                        'issuer': components_to_str(https_response[1].get_issuer().get_components()),
+                        'subject': components_to_str(https_response[1].get_subject().get_components())
+                        # TODO: is domain is certif alternate names ?
+                    }
                 }
             }
 
