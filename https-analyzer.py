@@ -11,7 +11,9 @@ import http.client
 import sys
 from copy import deepcopy
 
+import requests
 from OpenSSL import crypto
+from OpenSSL.crypto import X509
 from jinja2 import Template
 
 logging.getLogger().setLevel(logging.INFO)
@@ -55,8 +57,7 @@ def get_response(
         response = http_connection.getresponse()
 
         if isinstance(http_connection, http.client.HTTPSConnection):
-            x: http.client.HTTPSConnection = http_connection
-            pem_cert = ssl.DER_cert_to_PEM_cert(x.sock.getpeercert(True))
+            pem_cert = ssl.DER_cert_to_PEM_cert(http_connection.sock.getpeercert(True))
             x509_cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem_cert.encode())
         else:
             x509_cert = None
@@ -110,11 +111,22 @@ def dns_resolve(
         dns_server: str = None
 ) -> ipaddress.ip_address:
     """
-    ip = dns_resolve('www.akamai.com')
-    ip.is_private
+    >>> ip = dns_resolve('www.akamai.com')
+    >>> ip.is_private
     False
-
+    >>> ip = dns_resolve('www.akamai.com', 'dns-over-https')
+    >>> ip.is_private
+    False
     """
+
+    if dns_server == 'dns-over-https':
+        ret = requests.get(f'https://cloudflare-dns.com/dns-query?name={hostname}', headers={'accept': 'application/dns-json'})
+        sys.stderr.write(str(ret.json()))
+        sys.stderr.flush()
+        answer = ret.json()['Answer']
+        type1_data = [a['data'] for a in answer if a['type'] == 1]
+        assert len(type1_data) == 1
+        return ipaddress.ip_address(type1_data[0])
 
     cmd = f"dig +short {hostname}"
     if dns_server:
@@ -123,6 +135,19 @@ def dns_resolve(
         cmd += f" @{dns_server}"
     ip_as_str = subprocess.check_output(cmd, shell=True).strip().decode('utf-8').split('\n')[-1]
     return ipaddress.ip_address(ip_as_str)
+
+
+def get_certificate_san(x509cert: X509) -> str:
+    """
+    From: https://stackoverflow.com/a/50894566/1795027
+    """
+    san = ''
+    ext_count = x509cert.get_extension_count()
+    for i in range(0, ext_count):
+        ext = x509cert.get_extension(i)
+        if 'subjectAltName' in str(ext.get_short_name()):
+            san = ext.__str__()
+    return san
 
 
 if __name__ == '__main__':
@@ -196,7 +221,8 @@ if __name__ == '__main__':
                     'headerLocation': https_response[0].getheader('location'),
                     'certificate': {
                         'issuer': components_to_str(https_response[1].get_issuer().get_components()),
-                        'subject': components_to_str(https_response[1].get_subject().get_components())
+                        'subject': components_to_str(https_response[1].get_subject().get_components()),
+                        'san': get_certificate_san(https_response[1])
                         # TODO: is domain is certif alternate names ?
                     }
                 }

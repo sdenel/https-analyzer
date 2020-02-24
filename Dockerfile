@@ -1,6 +1,6 @@
 FROM python:3.8-alpine
 RUN apk add bind-tools && \
-    pip install -U Jinja2 && \
+    pip install -U Jinja2 requests && \
     apk add gcc musl-dev libffi-dev openssl-dev && \
     pip install -U pyopenssl && \
     apk del gcc musl-dev libffi-dev openssl-dev
