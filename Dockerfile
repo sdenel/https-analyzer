@@ -1,5 +1,9 @@
 FROM python:3.8-alpine
-RUN apk add bind-tools && pip install -U Jinja2
+RUN apk add bind-tools && \
+    pip install -U Jinja2 && \
+    apk add gcc musl-dev libffi-dev openssl-dev && \
+    pip install -U pyopenssl && \
+    apk del gcc musl-dev libffi-dev openssl-dev
 
 COPY / /opt/
 WORKDIR /opt/
